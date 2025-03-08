@@ -7,24 +7,24 @@ import ttkbootstrap as ttk
 class CPSInterpreter:
     def __init__(self):
         self.variables = {}
+        self.functions = {}
 
     def reset(self):
         self.variables.clear()
+        self.functions.clear()
 
     def run_code(self, code):
         self.reset()
         lines = [line.strip() for line in code.strip().split("\n") if line.strip()]  # Remove empty lines
         output = []
-
-        # Ensure script ends with '!'
-        if lines[-1] != "!":
-            return "Syntax Error: Expected '!' at the end of the script."
-
         execution_started = False
+        function_name = None
+        function_body = []
+
         for i, line in enumerate(lines):
             if line.startswith("if!app.run ^^true^^::do"):
                 execution_started = True
-                break  # Stop processing variables
+                break  # Stop processing functions and variables
 
             # Ignore empty lines
             if not line:
@@ -39,8 +39,23 @@ class CPSInterpreter:
                 var_name = parts[0][len("app.add ^^"):-2].strip()
                 var_value = parts[1][:-2].strip()
                 self.variables[var_name] = var_value
-            else:
-                return f"Syntax Error: Invalid variable declaration '{line}'"
+                continue
+
+            # Parsing function declarations
+            if line.startswith("app.get::^^") and line.endswith("^^"):
+                function_name = line[len("app.get::^^"):-2].strip()
+                function_body = []
+                continue
+
+            if function_name:
+                if line == "!":
+                    self.functions[function_name] = function_body  # Store function
+                    function_name = None
+                else:
+                    function_body.append(line)
+                continue
+
+            return f"Syntax Error: Invalid declaration '{line}'"
 
         if not execution_started:
             return "Syntax Error: Expected 'if!app.run ^^true^^::do' before execution."
@@ -48,13 +63,26 @@ class CPSInterpreter:
         # Execute CPS code
         for line in lines[i + 1:-1]:  # Exclude '!' from execution
             line = line.strip()
+
             if line.startswith("Console.line^^") and line.endswith("^^"):
                 text = line[len("Console.line^^"):-2].strip()
-
-                # Replace variable names with their values if they exist
                 output.append(self.variables.get(text, text))
-            else:
-                return f"Syntax Error: Invalid statement '{line}'"
+                continue
+
+            if line.startswith("app.getthe^^") and line.endswith("^^"):
+                function_name = line[len("app.getthe^^"):-2].strip()
+                if function_name in self.functions:
+                    for func_line in self.functions[function_name]:
+                        if func_line.startswith("Console.line^^") and func_line.endswith("^^"):
+                            text = func_line[len("Console.line^^"):-2].strip()
+                            output.append(self.variables.get(text, text))
+                        else:
+                            return f"Syntax Error: Invalid statement '{func_line}' in function '{function_name}'"
+                else:
+                    return f"Syntax Error: Function '{function_name}' not found."
+                continue
+
+            return f"Syntax Error: Invalid statement '{line}'"
 
         return "\n".join(output)
 
@@ -64,6 +92,8 @@ CPS_COMMANDS = [
     "if!app.run ^^true^^::do",
     "Console.line^^text in here^^",
     "app.add ^^variable_name^^:: value%^^value here^^",
+    "app.get::^^function_name^^",
+    "app.getthe^^function_name^^",
     "!"
 ]
 
@@ -134,14 +164,11 @@ class CPSGUI:
             return
 
         selected = self.autocomplete_listbox.get(tk.ACTIVE)
-
-        # Get the last typed word before inserting
         cursor_position = self.text_area.index(tk.INSERT)
         current_text = self.text_area.get("1.0", cursor_position)
         words = current_text.split()
         last_word = words[-1] if words else ""
 
-        # Replace only the last word with the full command
         updated_text = current_text[: -len(last_word)] + selected if last_word else selected
         self.text_area.delete("1.0", tk.END)
         self.text_area.insert("1.0", updated_text)
@@ -151,7 +178,7 @@ class CPSGUI:
     def confirm_autocomplete(self, event):
         """ Confirm the first autocomplete option with Tab key. """
         self.insert_autocomplete()
-        return "break"  # Prevent default tab behavior
+        return "break"
 
     def run_cps_code(self):
         """ Run the CPS code and display output/errors. """
